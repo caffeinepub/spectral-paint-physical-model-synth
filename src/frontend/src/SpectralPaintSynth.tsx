@@ -124,25 +124,31 @@ export default function SpectralPaintSynth() {
     seedCanvas(ampGridRef.current, hueGridRef.current);
   }, []);
 
-  const handlePlay = useCallback(async () => {
-    try {
-      // Prime synchronously (satisfies autoplay policy) then finish async init
-      if (!engineRef.current) engineRef.current = new AudioEngine();
-      engineRef.current.primeContext();
-      await engineRef.current.ensureRunning();
-      engineRef.current.play(
-        ampGridRef.current,
-        hueGridRef.current,
-        CANVAS_COLS,
-        CANVAS_BINS,
-        params,
-      );
-      setIsPlaying(true);
-      toast.success("Playing");
-    } catch (err) {
-      console.error("Audio play error:", err);
-      toast.error("Audio error — tap again to start");
-    }
+  const handlePlay = useCallback(() => {
+    // AudioContext must be created/resumed synchronously in the click handler
+    if (!engineRef.current) engineRef.current = new AudioEngine();
+    engineRef.current.primeContext();
+
+    // Async part: load worklet then trigger voices
+    engineRef.current
+      .ensureRunning()
+      .then(() => {
+        engineRef.current!.play(
+          ampGridRef.current,
+          hueGridRef.current,
+          CANVAS_COLS,
+          CANVAS_BINS,
+          params,
+        );
+        setIsPlaying(true);
+        toast.success("Playing");
+      })
+      .catch((err) => {
+        console.error("Audio init error:", err);
+        toast.error(
+          `Audio failed to start: ${err?.message ?? err}. Try tapping Play again.`,
+        );
+      });
   }, [params]);
 
   const handleStop = useCallback(() => {
@@ -150,69 +156,78 @@ export default function SpectralPaintSynth() {
     setIsPlaying(false);
   }, []);
 
-  const handleRecord = useCallback(async () => {
+  const handleRecord = useCallback(() => {
     if (isRecording) {
-      const blob = await engineRef.current?.stopRecordingAsync();
-      setIsRecording(false);
-      if (blob) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `spectral-paint-${Date.now()}.webm`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-        toast.success("Recording saved");
-      }
+      engineRef.current?.stopRecordingAsync().then((blob) => {
+        setIsRecording(false);
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `spectral-paint-${Date.now()}.webm`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+          toast.success("Recording saved");
+        }
+      });
     } else {
       if (!engineRef.current) engineRef.current = new AudioEngine();
       engineRef.current.primeContext();
-      await engineRef.current.ensureRunning();
-      engineRef.current.startRecording();
-      setIsRecording(true);
-      toast.success("Recording started");
+      engineRef.current.ensureRunning().then(() => {
+        engineRef.current!.startRecording();
+        setIsRecording(true);
+        toast.success("Recording started");
+      });
     }
   }, [isRecording]);
 
-  const handleSaveWav = useCallback(async () => {
+  const handleSaveWav = useCallback(() => {
     toast.info("Exporting WAV...");
     if (!engineRef.current) engineRef.current = new AudioEngine();
     engineRef.current.primeContext();
-    await engineRef.current.ensureRunning();
-    const blob = await engineRef.current?.exportWAV(5);
-    if (blob) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `spectral-paint-${Date.now()}.wav`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-      toast.success("WAV exported");
-    } else {
-      toast.error("WAV export failed");
-    }
+    engineRef.current
+      .ensureRunning()
+      .then(() => {
+        return engineRef.current!.exportWAV(5);
+      })
+      .then((blob) => {
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `spectral-paint-${Date.now()}.wav`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+          toast.success("WAV exported");
+        } else {
+          toast.error("WAV export failed");
+        }
+      });
   }, []);
 
-  const handleSaveMp3 = useCallback(async () => {
+  const handleSaveMp3 = useCallback(() => {
     if (!MediaRecorder.isTypeSupported("audio/mpeg")) {
       toast.info("MP3 not supported — saving as WebM");
     }
     if (!engineRef.current) engineRef.current = new AudioEngine();
     engineRef.current.primeContext();
-    await engineRef.current.ensureRunning();
-    engineRef.current.startRecording();
-    toast.info("Recording 5s for export...");
-    setTimeout(async () => {
-      const blob = await engineRef.current?.stopRecordingAsync();
-      if (blob) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `spectral-paint-${Date.now()}.webm`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-        toast.success("Audio exported");
-      }
-    }, 5000);
+    engineRef.current.ensureRunning().then(() => {
+      engineRef.current!.startRecording();
+      toast.info("Recording 5s for export...");
+      setTimeout(() => {
+        engineRef.current?.stopRecordingAsync().then((blob) => {
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `spectral-paint-${Date.now()}.webm`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            toast.success("Audio exported");
+          }
+        });
+      }, 5000);
+    });
   }, []);
 
   const handleLoadPreset = useCallback((name: string) => {
@@ -277,28 +292,27 @@ export default function SpectralPaintSynth() {
 
   const handleDraw = useCallback(() => {
     drawCountRef.current++;
-    // Prime audio context synchronously on first draw (user gesture is active here)
+    // Prime audio context synchronously — user gesture is active here
     if (!engineRef.current) engineRef.current = new AudioEngine();
     engineRef.current.primeContext();
 
-    // Auto-trigger sound every few strokes while not in manual play mode
-    if (!isPlaying && drawCountRef.current % 4 === 0) {
+    // Auto-trigger sound on draw strokes (every 2 strokes to avoid CPU spikes)
+    if (drawCountRef.current % 2 === 0) {
       engineRef.current
         .ensureRunning()
         .then(() => {
-          if (engineRef.current?.isReady()) {
-            engineRef.current.play(
-              ampGridRef.current,
-              hueGridRef.current,
-              CANVAS_COLS,
-              CANVAS_BINS,
-              params,
-            );
-          }
+          // After ensureRunning resolves the worklet is ready — play immediately
+          engineRef.current!.play(
+            ampGridRef.current,
+            hueGridRef.current,
+            CANVAS_COLS,
+            CANVAS_BINS,
+            params,
+          );
         })
         .catch(() => {});
     }
-  }, [isPlaying, params]);
+  }, [params]);
 
   // Cleanup
   useEffect(() => {
