@@ -20,6 +20,22 @@ export interface SynthParams {
   oscMix: number; // 0 to 1
   excitationEnergy: number; // 0 to 1
 
+  // Column excitation system
+  energyThreshold: number; // 0 to 1 — trigger threshold for excitation detection
+  amplitudeGain: number; // 0 to 3 — boost excitation amplitude
+  amplitudeFloor: number; // 0 to 0.5 — minimum amplitude to prevent silence
+  impulseWidth: number; // 0 to 1 — width of excitation impulse
+  energyCompressor: number; // 0 to 1 — compress dynamic range of excitation
+
+  // Playback control
+  playbackSpeed: number; // 0.1 to 4 — time stretch
+  canvasDuration: number; // 1 to 30 seconds — total playback duration
+  loopStart: number; // 0 to 1 — loop region start (fraction of canvas width)
+  loopEnd: number; // 0 to 1 — loop region end (fraction of canvas width)
+
+  // Debug
+  debugMode: boolean;
+
   // Resonator
   resonatorType:
     | "String"
@@ -112,7 +128,11 @@ export type BrushType =
   | "MIRROR"
   | "STACK"
   | "COLOR_PICKER"
-  | "FILL";
+  | "FILL"
+  | "LINE"
+  | "PLUCK"
+  | "SCATTER"
+  | "COMB";
 
 export interface BrushState {
   type: BrushType;

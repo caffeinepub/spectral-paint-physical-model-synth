@@ -24,6 +24,7 @@ import {
   Shuffle,
   Square,
   Upload,
+  VolumeX,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -31,6 +32,7 @@ import { toast } from "sonner";
 interface TopBarProps {
   isPlaying: boolean;
   isRecording: boolean;
+  isMuted: boolean;
   onPlay: () => void;
   onStop: () => void;
   onRecord: () => void;
@@ -39,6 +41,7 @@ interface TopBarProps {
   onLoadPreset: (name: string) => void;
   onSavePreset: (name: string) => void;
   onRandomPatch: () => void;
+  onQuiet: () => void;
   presetNames: string[];
   currentPreset: string | null;
 }
@@ -46,6 +49,7 @@ interface TopBarProps {
 export default function TopBar({
   isPlaying,
   isRecording,
+  isMuted,
   onPlay,
   onStop,
   onRecord,
@@ -54,6 +58,7 @@ export default function TopBar({
   onLoadPreset,
   onSavePreset,
   onRandomPatch,
+  onQuiet,
   presetNames,
   currentPreset,
 }: TopBarProps) {
@@ -135,6 +140,22 @@ export default function TopBar({
             className={`w-3 h-3 ${isRecording ? "fill-destructive" : ""}`}
           />
           <span className="hidden sm:inline">REC</span>
+        </button>
+
+        {/* Quiet / Mute button */}
+        <button
+          type="button"
+          data-ocid="topbar.quiet_button"
+          onClick={onQuiet}
+          className={`flex items-center gap-1 px-2 py-1 text-[11px] font-mono rounded border transition-all touch-target ${
+            isMuted
+              ? "border-yellow-500/60 text-yellow-400 bg-yellow-500/10"
+              : "border-synth-border text-muted-foreground hover:border-yellow-500/40 hover:text-yellow-400"
+          }`}
+          title="Quiet — silence all sound"
+        >
+          <VolumeX className="w-3 h-3" />
+          <span className="hidden sm:inline">QUIET</span>
         </button>
       </div>
 

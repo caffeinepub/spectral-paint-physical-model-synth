@@ -66,6 +66,38 @@ export default function ExcitationPanel({ params, onChange }: Props) {
         value={params.excitationEnergy}
         onChange={(v) => onChange({ excitationEnergy: v })}
       />
+      <SynthSlider
+        label="ENERGY THRESH"
+        value={params.energyThreshold}
+        min={0}
+        max={1}
+        step={0.01}
+        onChange={(v) => onChange({ energyThreshold: v })}
+      />
+      <SynthSlider
+        label="AMP GAIN"
+        value={params.amplitudeGain}
+        min={0}
+        max={3}
+        step={0.05}
+        onChange={(v) => onChange({ amplitudeGain: v })}
+      />
+      <SynthSlider
+        label="AMP FLOOR"
+        value={params.amplitudeFloor}
+        min={0}
+        max={0.5}
+        step={0.01}
+        onChange={(v) => onChange({ amplitudeFloor: v })}
+      />
+      <SynthSlider
+        label="IMPULSE WIDTH"
+        value={params.impulseWidth}
+        min={0}
+        max={1}
+        step={0.01}
+        onChange={(v) => onChange({ impulseWidth: v })}
+      />
     </div>
   );
 }

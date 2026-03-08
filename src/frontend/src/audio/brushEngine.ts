@@ -352,6 +352,131 @@ export const FILL_BRUSH: BrushFn = (
   }
 };
 
+/**
+ * LINE brush: draws a sustained horizontal line from left to right at the
+ * drawn row. The entire span of columns covered by the drag holds the note
+ * (amplitude stays constant across columns) — ideal for sustained tones.
+ */
+export const LINE_BRUSH: BrushFn = (
+  ampGrid,
+  hueGrid,
+  col,
+  row,
+  brushSize,
+  hue,
+  _sat,
+  brightness,
+  cols,
+  bins,
+) => {
+  // Draw a thin horizontal streak across a wide column range
+  for (let c = col - brushSize * 4; c <= col + brushSize * 4; c++) {
+    for (let r = row - 1; r <= row + 1; r++) {
+      if (r < 0 || r >= bins) continue;
+      const amp = r === row ? brightness : brightness * 0.4;
+      drawAt(ampGrid, hueGrid, c, r, amp, hue, cols, bins);
+    }
+  }
+};
+
+/**
+ * PLUCK brush: draws a very narrow spike — only 1-2 columns wide —
+ * so the column energy rises then immediately drops, producing a single
+ * pluck event per stroke rather than a sustained pad.
+ */
+export const PLUCK_BRUSH: BrushFn = (
+  ampGrid,
+  hueGrid,
+  col,
+  row,
+  brushSize,
+  hue,
+  _sat,
+  brightness,
+  cols,
+  bins,
+) => {
+  const sigma = Math.max(0.8, brushSize * 0.3);
+  // Very narrow in time (columns), normal in frequency (rows)
+  for (let c = col - 1; c <= col + 1; c++) {
+    const tEnv = Math.exp(-((c - col) ** 2) / (2 * 0.6 * 0.6));
+    for (let r = row - brushSize; r <= row + brushSize; r++) {
+      const dist = Math.abs(r - row);
+      const amp = gaussian(dist, sigma) * brightness * tEnv;
+      if (amp > 0.02) drawAt(ampGrid, hueGrid, c, r, amp, hue, cols, bins);
+    }
+  }
+  // Also erase columns around the spike so energy transitions cleanly
+  for (let c = col - 4; c < col - 1; c++) {
+    if (c < 0 || c >= cols) continue;
+    if (!ampGrid[c]) continue;
+    for (let r = row - brushSize - 1; r <= row + brushSize + 1; r++) {
+      if (r >= 0 && r < bins) ampGrid[c][r] = 0;
+    }
+  }
+  for (let c = col + 2; c <= col + 5; c++) {
+    if (c < 0 || c >= cols) continue;
+    if (!ampGrid[c]) continue;
+    for (let r = row - brushSize - 1; r <= row + brushSize + 1; r++) {
+      if (r >= 0 && r < bins) ampGrid[c][r] = 0;
+    }
+  }
+};
+
+/**
+ * SCATTER brush: places random dots at various frequencies and times around
+ * the draw point — creates a spray of independent pluck events.
+ */
+export const SCATTER_BRUSH: BrushFn = (
+  ampGrid,
+  hueGrid,
+  col,
+  row,
+  brushSize,
+  hue,
+  _sat,
+  brightness,
+  cols,
+  bins,
+) => {
+  const count = Math.max(5, brushSize * 6);
+  for (let i = 0; i < count; i++) {
+    const dc = Math.round((Math.random() * 2 - 1) * brushSize * 3);
+    const dr = Math.round((Math.random() * 2 - 1) * brushSize * 2);
+    const amp = (0.5 + Math.random() * 0.5) * brightness;
+    const hv = (hue + (Math.random() - 0.5) * 40 + 360) % 360;
+    drawAt(ampGrid, hueGrid, col + dc, row + dr, amp, hv, cols, bins);
+  }
+};
+
+/**
+ * COMB brush: draws evenly-spaced frequency bands (like a comb filter)
+ * creating a distinctive metallic/robotic tone.
+ */
+export const COMB_BRUSH: BrushFn = (
+  ampGrid,
+  hueGrid,
+  col,
+  row,
+  brushSize,
+  hue,
+  _sat,
+  brightness,
+  cols,
+  bins,
+) => {
+  const spacing = Math.max(3, Math.round(bins / 12));
+  for (let r = row % spacing; r < bins; r += spacing) {
+    const distFromCenter = Math.abs(r - row);
+    const decay = Math.exp(-distFromCenter / (bins * 0.4));
+    for (let c = col - brushSize; c <= col + brushSize; c++) {
+      const amp = brightness * decay;
+      if (amp > 0.02)
+        drawAt(ampGrid, hueGrid, c, r, amp, (hue + 30) % 360, cols, bins);
+    }
+  }
+};
+
 export function getBrush(type: BrushType): BrushFn {
   const map: Record<BrushType, BrushFn> = {
     HARMONIC: HARMONIC_BRUSH,
@@ -366,6 +491,10 @@ export function getBrush(type: BrushType): BrushFn {
     STACK: STACK_BRUSH,
     COLOR_PICKER: COLOR_PICKER_BRUSH,
     FILL: FILL_BRUSH,
+    LINE: LINE_BRUSH,
+    PLUCK: PLUCK_BRUSH,
+    SCATTER: SCATTER_BRUSH,
+    COMB: COMB_BRUSH,
   };
   return map[type] ?? HARMONIC_BRUSH;
 }

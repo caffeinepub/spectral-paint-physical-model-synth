@@ -58,6 +58,16 @@ interface SpectralCanvasProps {
   ampGridRef: React.MutableRefObject<Float32Array[]>;
   hueGridRef: React.MutableRefObject<Uint8Array[]>;
   onDraw: () => void;
+  playheadPosition?: number;
+  excitationFlashes?: { col: number; energy: number; id: number }[];
+  debugData?: {
+    columnEnergy: number;
+    harmonicEnergy: number[];
+    resonatorInputLevel: number;
+  } | null;
+  debugMode?: boolean;
+  loopStart?: number;
+  loopEnd?: number;
 }
 
 export default function SpectralCanvas({
@@ -67,10 +77,19 @@ export default function SpectralCanvas({
   ampGridRef,
   hueGridRef,
   onDraw,
+  playheadPosition,
+  excitationFlashes,
+  debugData,
+  debugMode,
+  loopStart,
+  loopEnd,
 }: SpectralCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number>(0);
+  const overlayIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   const dirtyRef = useRef(false);
   const isDrawingRef = useRef(false);
   const lastPosRef = useRef<{ col: number; row: number } | null>(null);
@@ -78,6 +97,33 @@ export default function SpectralCanvas({
   const [_panOffset, _setPanOffset] = useState(0);
   const pinchStartDistRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef(1);
+
+  // Refs for overlay rendering (avoid stale closure inside setInterval)
+  const playheadRef = useRef(playheadPosition);
+  const flashesRef = useRef(excitationFlashes);
+  const debugDataRef = useRef(debugData);
+  const debugModeRef = useRef(debugMode);
+  const loopStartRef = useRef(loopStart);
+  const loopEndRef = useRef(loopEnd);
+
+  useEffect(() => {
+    playheadRef.current = playheadPosition;
+  }, [playheadPosition]);
+  useEffect(() => {
+    flashesRef.current = excitationFlashes;
+  }, [excitationFlashes]);
+  useEffect(() => {
+    debugDataRef.current = debugData;
+  }, [debugData]);
+  useEffect(() => {
+    debugModeRef.current = debugMode;
+  }, [debugMode]);
+  useEffect(() => {
+    loopStartRef.current = loopStart;
+  }, [loopStart]);
+  useEffect(() => {
+    loopEndRef.current = loopEnd;
+  }, [loopEnd]);
 
   // Initialize grids
   useEffect(() => {
@@ -184,6 +230,126 @@ export default function SpectralCanvas({
     }
   }, [ampGridRef, hueGridRef]);
 
+  const renderOverlay = useCallback(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+
+    const W = overlay.width;
+    const H = overlay.height;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // --- Loop range markers ---
+    const lStart = loopStartRef.current;
+    const lEnd = loopEndRef.current;
+    if (lStart !== undefined && lEnd !== undefined && lEnd > lStart) {
+      const x0 = lStart * W;
+      const x1 = lEnd * W;
+
+      // Fill region
+      ctx.fillStyle = "rgba(255,200,0,0.04)";
+      ctx.fillRect(x0, 0, x1 - x0, H);
+
+      // Left boundary
+      ctx.strokeStyle = "rgba(255,200,0,0.7)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x0, 0);
+      ctx.lineTo(x0, H);
+      ctx.stroke();
+
+      // Right boundary
+      ctx.beginPath();
+      ctx.moveTo(x1, 0);
+      ctx.lineTo(x1, H);
+      ctx.stroke();
+    }
+
+    // --- Excitation flashes ---
+    const flashes = flashesRef.current;
+    if (flashes && flashes.length > 0) {
+      for (const flash of flashes) {
+        const fx = (flash.col / CANVAS_COLS) * W;
+        const alpha = Math.min(1, flash.energy) * 0.9;
+        const grad = ctx.createLinearGradient(fx, 0, fx, H);
+        grad.addColorStop(0, `rgba(255,255,100,${alpha})`);
+        grad.addColorStop(0.5, `rgba(255,200,50,${alpha * 0.6})`);
+        grad.addColorStop(1, "rgba(255,255,100,0)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(fx - 1.5, 0, 3, H);
+      }
+    }
+
+    // --- Playhead line ---
+    const ph = playheadRef.current;
+    if (ph !== undefined && ph >= 0) {
+      const px = ph * W;
+      ctx.save();
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = "#00ff88";
+      ctx.strokeStyle = "#00ff88";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, H);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // --- Harmonic energy sidebar (debug mode only) ---
+    const dData = debugDataRef.current;
+    const dMode = debugModeRef.current;
+
+    if (dMode && dData && dData.harmonicEnergy.length > 0) {
+      const bins = dData.harmonicEnergy.length;
+      const barH = Math.max(1, Math.floor(H / bins));
+      const maxE = Math.max(...dData.harmonicEnergy, 0.001);
+
+      for (let i = 0; i < bins; i++) {
+        const e = dData.harmonicEnergy[i] / maxE;
+        const barW = e * 40;
+        const y = (i / bins) * H;
+        ctx.fillStyle = "rgba(100,200,255,0.8)";
+        ctx.fillRect(W - barW, y, barW, Math.max(1, barH - 1));
+      }
+    }
+
+    // --- Debug overlay (bottom-left) ---
+    if (dMode && dData) {
+      const boxX = 4;
+      const boxY = H - 40;
+      const boxW = 90;
+      const boxH = 36;
+
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+
+      // Column energy bar
+      const barW = Math.min(
+        60,
+        (dData.columnEnergy / Math.max(dData.columnEnergy, 1)) * 60,
+      );
+      ctx.fillStyle = "#00ff88";
+      ctx.fillRect(boxX + 2, boxY + 2, barW, 4);
+
+      ctx.fillStyle = "rgba(200,255,200,0.9)";
+      ctx.font = "8px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(
+        `COL E: ${dData.columnEnergy.toFixed(3)}`,
+        boxX + 2,
+        boxY + 18,
+      );
+      ctx.fillText(
+        `RES IN: ${dData.resonatorInputLevel.toFixed(3)}`,
+        boxX + 2,
+        boxY + 30,
+      );
+    }
+  }, []);
+
   useEffect(() => {
     let running = true;
     const loop = () => {
@@ -200,6 +366,17 @@ export default function SpectralCanvas({
       cancelAnimationFrame(animFrameRef.current);
     };
   }, [renderCanvas]);
+
+  // Overlay render at ~30fps via setInterval
+  useEffect(() => {
+    overlayIntervalRef.current = setInterval(renderOverlay, 33);
+    return () => {
+      if (overlayIntervalRef.current !== null) {
+        clearInterval(overlayIntervalRef.current);
+        overlayIntervalRef.current = null;
+      }
+    };
+  }, [renderOverlay]);
 
   // Initial render
   useEffect(() => {
@@ -424,7 +601,13 @@ export default function SpectralCanvas({
         onTouchEnd={handleTouchEnd}
         onMouseDown={handleMouseDown}
       />
-      <canvas ref={overlayRef} className="hidden" />
+      <canvas
+        ref={overlayRef}
+        width={CANVAS_COLS * 4}
+        height={CANVAS_BINS * 8}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+        style={{ imageRendering: "pixelated" }}
+      />
       {zoom !== 1 && (
         <div className="absolute top-1 right-1 text-xs font-mono text-synth-dim bg-black/60 px-1 rounded">
           {zoom.toFixed(1)}×

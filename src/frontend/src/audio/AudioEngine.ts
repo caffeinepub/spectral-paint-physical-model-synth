@@ -6,6 +6,17 @@ export interface HarmonicBin {
   hue: number;
 }
 
+export interface PlaybackState {
+  isPlaying: boolean;
+  playheadPosition: number; // 0..1 normalized across canvas
+  currentColumn: number;
+}
+
+export interface ExcitationEvent {
+  column: number;
+  energy: number;
+}
+
 function encodeWAV(
   left: Float32Array,
   right: Float32Array,
@@ -51,27 +62,53 @@ function encodeWAV(
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-// Build an absolute URL to the worklet so it works both locally and on IC
 function getWorkletUrl(): string {
-  // Use origin-relative absolute URL to avoid path issues on IC
   return `${window.location.origin}/spectral-paint-processor.js`;
 }
+
+const CANVAS_COLS = 128;
+const CANVAS_BINS = 64;
 
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private recordedChunks: Blob[] = [];
-  private isPlaying = false;
   private params: SynthParams | null = null;
   private masterGain: GainNode | null = null;
   private streamDest: MediaStreamAudioDestinationNode | null = null;
   private initPromise: Promise<void> | null = null;
   private initFailed = false;
 
+  // Playback scan state
+  private scanRafId: number | null = null;
+  private scanStartTime: number | null = null;
+  private scanLastColumn = -1;
+  private scanAmpGrid: Float32Array[] | null = null;
+  private scanHueGrid: Uint8Array[] | null = null;
+  private scanParams: SynthParams | null = null;
+  private scanLoopStart = 0;
+  private scanLoopEnd = 1;
+  private scanDuration = 8; // seconds
+  private scanSpeed = 1.0;
+
+  // Preallocated column analysis buffer (no heap allocation during scan)
+  private readonly colHarmonicEnergy = new Float32Array(CANVAS_BINS);
+
+  // Callbacks
+  public onPlayheadMove: ((position: number, column: number) => void) | null =
+    null;
+  public onExcitationEvent: ((column: number, energy: number) => void) | null =
+    null;
+  public onDebugData: ((data: DebugData) => void) | null = null;
+
+  // Debug state
+  private lastDebugUpdate = 0;
+  private debugColumnEnergy = 0;
+  private debugHarmonicEnergy = new Float32Array(CANVAS_BINS);
+
   /**
-   * Call synchronously inside a user-gesture handler to satisfy autoplay policy.
-   * Creates the AudioContext and resumes it immediately.
+   * Call synchronously inside a user-gesture handler.
    */
   primeContext(): void {
     if (this.ctx) {
@@ -85,21 +122,16 @@ export class AudioEngine {
       latencyHint: "interactive",
     });
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0.7;
+    this.masterGain.gain.value = 3.5;
     this.masterGain.connect(this.ctx.destination);
     this.ctx.resume().catch(() => {});
   }
 
-  /**
-   * Loads the AudioWorklet module and wires up the node graph.
-   * Resets and retries if previously failed.
-   */
   async init(): Promise<void> {
     if (!this.ctx) {
       this.primeContext();
     }
 
-    // If previously failed, reset so we can retry
     if (this.initFailed) {
       this.initPromise = null;
       this.initFailed = false;
@@ -117,11 +149,11 @@ export class AudioEngine {
 
       if (!this.masterGain) {
         this.masterGain = ctx.createGain();
-        this.masterGain.gain.value = 0.7;
+        this.masterGain.gain.value = 3.5;
+        // Always connect to speakers first
         this.masterGain.connect(ctx.destination);
       }
 
-      // Load worklet using absolute origin URL — works on IC asset canister
       const workletUrl = getWorkletUrl();
       await ctx.audioWorklet.addModule(workletUrl);
 
@@ -131,8 +163,20 @@ export class AudioEngine {
         outputChannelCount: [2],
       });
 
-      this.streamDest = ctx.createMediaStreamDestination();
+      // Listen for excitation events from worklet
+      this.workletNode.port.onmessage = (e) => {
+        if (e.data.type === "excitationEvent") {
+          if (this.onExcitationEvent && this.scanLastColumn >= 0) {
+            this.onExcitationEvent(this.scanLastColumn, e.data.energy);
+          }
+        }
+      };
+
+      // worklet -> masterGain -> speakers (ctx.destination)
       this.workletNode.connect(this.masterGain!);
+
+      // Also branch masterGain -> streamDest for recording (parallel tap, not replacing speaker route)
+      this.streamDest = ctx.createMediaStreamDestination();
       this.masterGain!.connect(this.streamDest);
 
       if (ctx.state === "suspended") {
@@ -162,6 +206,173 @@ export class AudioEngine {
     return !!this.workletNode && this.ctx?.state === "running";
   }
 
+  /**
+   * Start the time-based column scanning playback.
+   * This is the new primary playback method — replaces the old static play().
+   */
+  startPlaybackScan(
+    ampGrid: Float32Array[],
+    hueGrid: Uint8Array[],
+    params: SynthParams,
+  ): void {
+    if (!this.workletNode) return;
+
+    this.stopPlaybackScan();
+
+    this.scanAmpGrid = ampGrid;
+    this.scanHueGrid = hueGrid;
+    this.scanParams = params;
+    this.scanLoopStart = params.loopStart ?? 0;
+    this.scanLoopEnd = params.loopEnd ?? 1;
+    this.scanDuration = Math.max(1, params.canvasDuration ?? 8);
+    this.scanSpeed = Math.max(0.1, params.playbackSpeed ?? 1.0);
+    this.scanStartTime = performance.now();
+    this.scanLastColumn = -1;
+
+    this.updateParams(params);
+
+    this._scheduleScan();
+  }
+
+  private _scheduleScan(): void {
+    this.scanRafId = requestAnimationFrame(() => this._doScan());
+  }
+
+  private _doScan(): void {
+    if (
+      !this.workletNode ||
+      !this.scanAmpGrid ||
+      !this.scanHueGrid ||
+      !this.scanParams
+    )
+      return;
+    if (this.scanStartTime === null) return;
+
+    const now = performance.now();
+    const elapsed = (now - this.scanStartTime) / 1000; // seconds
+
+    const loopStart = this.scanLoopStart;
+    const loopEnd = Math.max(loopStart + 0.01, this.scanLoopEnd);
+    const loopDuration =
+      ((loopEnd - loopStart) * this.scanDuration) / this.scanSpeed;
+
+    // Compute position within loop region
+    const loopElapsed = elapsed % loopDuration;
+    const loopProgress = loopElapsed / loopDuration; // 0..1 within loop region
+    const playheadPosition = loopStart + loopProgress * (loopEnd - loopStart); // 0..1 of canvas
+
+    const currentCol = Math.floor(playheadPosition * CANVAS_COLS);
+    const clampedCol = Math.max(0, Math.min(CANVAS_COLS - 1, currentCol));
+
+    // Fractional position within current column (for interpolation smoothing)
+    const playheadFrac = playheadPosition * CANVAS_COLS - currentCol;
+
+    // Notify UI of playhead position
+    if (this.onPlayheadMove) {
+      this.onPlayheadMove(playheadPosition, clampedCol);
+    }
+
+    // Only send column data when we move to a new column
+    if (clampedCol !== this.scanLastColumn) {
+      this.scanLastColumn = clampedCol;
+      this._sendColumnData(clampedCol, playheadFrac);
+    }
+
+    this._scheduleScan();
+  }
+
+  /**
+   * Extract pixel data from a canvas column and send to worklet.
+   * Uses preallocated buffer — no heap allocation.
+   */
+  private _sendColumnData(col: number, playheadFrac: number): void {
+    if (
+      !this.workletNode ||
+      !this.scanAmpGrid ||
+      !this.scanHueGrid ||
+      !this.scanParams
+    )
+      return;
+
+    const ampCol = this.scanAmpGrid[col];
+    const hueCol = this.scanHueGrid[col];
+
+    // Build harmonic energy array from canvas column pixel data
+    // Map CANVAS_BINS (32) -> CANVAS_BINS (64) by upsampling
+    let maxEnergy = 0;
+    let dominantHue = 0;
+    let maxAmpBin = 0;
+
+    const srcBins = ampCol ? ampCol.length : 0;
+    const dstBins = CANVAS_BINS;
+
+    this.colHarmonicEnergy.fill(0);
+
+    for (let b = 0; b < srcBins; b++) {
+      const amp = ampCol[b] ?? 0;
+      if (amp < 0.002) continue;
+
+      // Map source bin to destination (upsample from 32 to 64)
+      const dstBin = Math.floor((b / srcBins) * dstBins);
+      this.colHarmonicEnergy[dstBin] += amp;
+
+      // Also add to adjacent bin for smoothing
+      if (dstBin + 1 < dstBins) {
+        this.colHarmonicEnergy[dstBin + 1] += amp * 0.5;
+      }
+
+      if (amp > maxAmpBin) {
+        maxAmpBin = amp;
+        dominantHue = hueCol?.[b] ?? 0;
+      }
+      if (this.colHarmonicEnergy[dstBin] > maxEnergy)
+        maxEnergy = this.colHarmonicEnergy[dstBin];
+    }
+
+    // Debug: store for debug panel (throttled)
+    const nowMs = performance.now();
+    if (nowMs - this.lastDebugUpdate > 50) {
+      this.lastDebugUpdate = nowMs;
+      this.debugColumnEnergy = maxEnergy;
+      this.debugHarmonicEnergy.set(this.colHarmonicEnergy);
+      if (this.onDebugData) {
+        this.onDebugData({
+          columnEnergy: this.debugColumnEnergy,
+          harmonicEnergy: Array.from(this.debugHarmonicEnergy),
+          resonatorInputLevel: maxEnergy,
+        });
+      }
+    }
+
+    const panSpread = this.scanParams.panSpread ?? 0.3;
+
+    // Transfer harmonic energy to worklet (Transferable for zero-copy)
+    const energyCopy = new Float32Array(this.colHarmonicEnergy);
+    this.workletNode.port.postMessage(
+      {
+        type: "setCanvasColumn",
+        harmonicEnergy: energyCopy,
+        playheadFrac,
+        dominantHue,
+        panSpread,
+      },
+      [energyCopy.buffer],
+    );
+  }
+
+  stopPlaybackScan(): void {
+    if (this.scanRafId !== null) {
+      cancelAnimationFrame(this.scanRafId);
+      this.scanRafId = null;
+    }
+    this.scanStartTime = null;
+    this.scanLastColumn = -1;
+  }
+
+  /**
+   * Legacy play() for draw-stroke triggered sound.
+   * Reads the painted column directly near the brush position.
+   */
   play(
     ampGrid: Float32Array[],
     hueGrid: Uint8Array[],
@@ -171,66 +382,92 @@ export class AudioEngine {
   ): void {
     if (!this.workletNode) return;
     this.params = params;
-    this.isPlaying = true;
 
-    const activeCols: number[] = [];
+    this.updateParams(params);
+
+    // Find a column with significant energy near the center
+    let bestCol = Math.floor(cols / 2);
+    let bestEnergy = 0;
     for (let c = 0; c < cols; c++) {
-      let totalAmp = 0;
-      for (let r = 0; r < rows; r++) {
-        totalAmp += ampGrid[c]?.[r] ?? 0;
+      let energy = 0;
+      const ampCol = ampGrid[c];
+      if (!ampCol) continue;
+      for (let r = 0; r < rows; r++) energy += ampCol[r] ?? 0;
+      if (energy > bestEnergy) {
+        bestEnergy = energy;
+        bestCol = c;
       }
-      if (totalAmp > 0.01) activeCols.push(c);
     }
 
-    const voiceCount = Math.min(activeCols.length, 6);
-    const stride = Math.max(1, Math.floor(activeCols.length / voiceCount));
-
-    for (let vi = 0; vi < voiceCount; vi++) {
-      const col = activeCols[vi * stride] ?? activeCols[vi];
-      if (col === undefined) continue;
-
-      const bins: HarmonicBin[] = [];
-      for (let r = 0; r < rows; r++) {
-        const amp = ampGrid[col]?.[r] ?? 0;
-        if (amp > 0.01) {
-          bins.push({
-            bin: r,
-            amplitude: amp,
-            hue: hueGrid[col]?.[r] ?? 0,
-          });
-        }
-      }
-
-      if (bins.length === 0) continue;
-
-      let dominantHue = 0;
-      let maxAmp = 0;
-      for (const b of bins) {
-        if (b.amplitude > maxAmp) {
-          maxAmp = b.amplitude;
-          dominantHue = b.hue;
-        }
-      }
-
-      const excitationType = this.hueToExcitationType(dominantHue);
-      const note = Math.round((col / cols) * 36);
-      const pan =
-        (params.panSpread ?? 0) * ((vi / Math.max(1, voiceCount - 1)) * 2 - 1);
-
-      this.workletNode.port.postMessage({
-        type: "triggerVoice",
-        bins,
-        pan,
-        excitationType,
-        amplitude: 0.8,
-        note,
-      });
+    if (bestEnergy < 0.01) {
+      // Canvas is empty — trigger a default voice
+      this._triggerDefaultVoice(params);
+      return;
     }
+
+    // Build bins from best column
+    const bins: HarmonicBin[] = [];
+    const ampCol = ampGrid[bestCol];
+    const hueCol = hueGrid[bestCol];
+    for (let r = 0; r < rows; r++) {
+      const amp = ampCol?.[r] ?? 0;
+      if (amp > 0.01) {
+        bins.push({ bin: r, amplitude: amp, hue: hueCol?.[r] ?? 0 });
+      }
+    }
+
+    let dominantHue = 0;
+    let maxAmp = 0;
+    for (const b of bins) {
+      if (b.amplitude > maxAmp) {
+        maxAmp = b.amplitude;
+        dominantHue = b.hue;
+      }
+    }
+
+    const excitationType = this.hueToExcitationType(dominantHue);
+    const note = Math.round((bestCol / cols) * 36);
+
+    this.workletNode.port.postMessage({
+      type: "triggerVoice",
+      bins,
+      pan: 0,
+      excitationType,
+      amplitude: 1.0,
+      note,
+    });
+  }
+
+  private _triggerDefaultVoice(params: SynthParams): void {
+    if (!this.workletNode) return;
+    const sourceMap: Record<string, number> = {
+      SpectralHarmonics: 0,
+      NoiseBurst: 6,
+      OscillatorStack: 2,
+      AirFlow: 3,
+      PulseStrike: 1,
+    };
+    const excitationType = sourceMap[params.excitationSource] ?? 0;
+    const bins: HarmonicBin[] = [];
+    const numBins = Math.max(4, Math.round(params.harmonicDensity * 16));
+    for (let b = 0; b < numBins; b++) {
+      const amp = (params.excitationEnergy ?? 0.8) * (1 - b / numBins) ** 1.5;
+      if (amp > 0.02)
+        bins.push({ bin: b, amplitude: amp, hue: excitationType * 45 });
+    }
+    this.workletNode.port.postMessage({
+      type: "triggerVoice",
+      bins,
+      pan: 0,
+      excitationType,
+      amplitude: 1.0,
+      note: 12,
+    });
   }
 
   stop(): void {
+    this.stopPlaybackScan();
     if (!this.workletNode) return;
-    this.isPlaying = false;
     this.workletNode.port.postMessage({ type: "stopAll" });
   }
 
@@ -297,8 +534,24 @@ export class AudioEngine {
         brightness: params.brightness,
         pickupPosition: params.pickupPosition,
         resonatorMorph: params.resonatorMorph,
+        excitationEnergy: params.excitationEnergy,
+        attackSharpness: params.attackSharpness,
+        energyThreshold: params.energyThreshold ?? 0.12,
+        amplitudeGain: params.amplitudeGain ?? 1.5,
+        amplitudeFloor: params.amplitudeFloor ?? 0.05,
+        impulseWidth: params.impulseWidth ?? 0.5,
+        energyCompressor: params.energyCompressor ?? 0,
       },
     });
+
+    // Update scan params if currently scanning
+    if (this.scanParams) {
+      this.scanParams = params;
+      this.scanLoopStart = params.loopStart ?? 0;
+      this.scanLoopEnd = params.loopEnd ?? 1;
+      this.scanDuration = Math.max(1, params.canvasDuration ?? 8);
+      this.scanSpeed = Math.max(0.1, params.playbackSpeed ?? 1.0);
+    }
   }
 
   setEffect(name: string, enabled: boolean, mix: number): void {
@@ -342,9 +595,8 @@ export class AudioEngine {
     });
   }
 
-  async exportWAV(durationSec = 5): Promise<Blob | null> {
+  async exportWAV(durationSec = 8): Promise<Blob | null> {
     if (!this.params) return null;
-
     try {
       const offlineCtx = new OfflineAudioContext(2, 44100 * durationSec, 44100);
       await offlineCtx.audioWorklet.addModule(getWorkletUrl());
@@ -361,24 +613,65 @@ export class AudioEngine {
 
       offlineWorklet.connect(offlineCtx.destination);
 
-      if (this.params) {
-        const params = this.params;
-        offlineWorklet.port.postMessage({
-          type: "updateParams",
-          params: {
-            filterType: ["Lowpass", "Bandpass", "Highpass"].indexOf(
-              params.filterType,
-            ),
-            filterCutoff: params.filterCutoff,
-            filterResonance: params.filterResonance,
-            sustainEnergy: params.sustainEnergy,
-            tension: params.tension,
-            damping: params.damping,
-            resonance: params.resonance,
-            decayTime: params.decayTime,
-            brightness: params.brightness,
-          },
-        });
+      const params = this.params;
+      offlineWorklet.port.postMessage({
+        type: "updateParams",
+        params: {
+          filterType: ["Lowpass", "Bandpass", "Highpass"].indexOf(
+            params.filterType,
+          ),
+          filterCutoff: params.filterCutoff,
+          filterResonance: params.filterResonance,
+          sustainEnergy: params.sustainEnergy,
+          tension: params.tension,
+          damping: params.damping,
+          resonance: params.resonance,
+          decayTime: params.decayTime,
+          brightness: params.brightness,
+          excitationEnergy: params.excitationEnergy,
+          energyThreshold: params.energyThreshold ?? 0.12,
+          amplitudeGain: params.amplitudeGain ?? 1.5,
+          amplitudeFloor: params.amplitudeFloor ?? 0.05,
+        },
+      });
+
+      // Trigger voices using canvas scan for accurate reproduction
+      if (this.scanAmpGrid && this.scanHueGrid) {
+        const scanDuration = params.canvasDuration ?? 8;
+        const cols = CANVAS_COLS;
+        const colInterval = (scanDuration / cols) * 44100;
+
+        for (let c = 0; c < cols; c++) {
+          const ampCol = this.scanAmpGrid[c];
+          if (!ampCol) continue;
+
+          let energy = 0;
+          for (let b = 0; b < ampCol.length; b++) energy += ampCol[b];
+          if (energy < 0.05) continue;
+
+          const bins: HarmonicBin[] = [];
+          for (let b = 0; b < ampCol.length; b++) {
+            if (ampCol[b] > 0.01) {
+              bins.push({
+                bin: b,
+                amplitude: ampCol[b],
+                hue: this.scanHueGrid[c]?.[b] ?? 0,
+              });
+            }
+          }
+
+          offlineCtx.suspend((c * colInterval) / 44100).then(() => {
+            offlineWorklet.port.postMessage({
+              type: "triggerVoice",
+              bins,
+              pan: 0,
+              excitationType: 0,
+              amplitude: 1.0,
+              note: 12,
+            });
+            offlineCtx.resume();
+          });
+        }
       }
 
       const buffer = await offlineCtx.startRendering();
@@ -390,15 +683,33 @@ export class AudioEngine {
     }
   }
 
+  setMasterGain(value: number): void {
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setTargetAtTime(value, this.ctx.currentTime, 0.05);
+    }
+  }
+
+  silenceVoices(): void {
+    if (!this.workletNode) return;
+    this.workletNode.port.postMessage({ type: "stopAll" });
+  }
+
   async resume(): Promise<void> {
     if (this.ctx?.state === "suspended") await this.ctx.resume();
   }
 
   destroy(): void {
+    this.stopPlaybackScan();
     this.workletNode?.disconnect();
     this.ctx?.close();
     this.ctx = null;
     this.workletNode = null;
     this.initPromise = null;
   }
+}
+
+export interface DebugData {
+  columnEnergy: number;
+  harmonicEnergy: number[];
+  resonatorInputLevel: number;
 }

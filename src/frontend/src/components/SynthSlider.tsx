@@ -9,6 +9,7 @@ interface SynthSliderProps {
   onChange: (v: number) => void;
   displayValue?: string;
   accent?: string;
+  dataOcid?: string;
 }
 
 export default function SynthSlider({
@@ -20,6 +21,7 @@ export default function SynthSlider({
   onChange,
   displayValue,
   accent,
+  dataOcid,
 }: SynthSliderProps) {
   const id = useId();
   const pct = ((value - min) / (max - min)) * 100;
@@ -42,6 +44,7 @@ export default function SynthSlider({
         max={max}
         step={step}
         value={value}
+        data-ocid={dataOcid}
         onChange={(e) => onChange(Number(e.target.value))}
         style={
           {

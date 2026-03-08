@@ -5,19 +5,43 @@ interface BrushPanelProps {
   onChange: (updates: Partial<BrushState>) => void;
 }
 
-const BRUSHES: { type: BrushType; label: string; icon: string }[] = [
-  { type: "HARMONIC", label: "HARM", icon: "◎" },
-  { type: "NOISE", label: "NOIS", icon: "▒" },
-  { type: "GRADIENT", label: "GRAD", icon: "◑" },
-  { type: "FORMANT", label: "FORM", icon: "⊕" },
-  { type: "METAL", label: "METL", icon: "⋆" },
-  { type: "ERASE", label: "ERAS", icon: "✕" },
-  { type: "SMOOTH", label: "SMTH", icon: "≈" },
-  { type: "RANDOM", label: "RAND", icon: "⁂" },
-  { type: "MIRROR", label: "MIRR", icon: "⇔" },
-  { type: "STACK", label: "STCK", icon: "⊞" },
-  { type: "COLOR_PICKER", label: "PICK", icon: "⊙" },
-  { type: "FILL", label: "FILL", icon: "▣" },
+const BRUSHES: {
+  type: BrushType;
+  label: string;
+  icon: string;
+  tip?: string;
+}[] = [
+  { type: "HARMONIC", label: "HARM", icon: "◎", tip: "Smooth harmonic peaks" },
+  { type: "NOISE", label: "NOIS", icon: "▒", tip: "Broadband noise energy" },
+  { type: "GRADIENT", label: "GRAD", icon: "◑", tip: "Amplitude slope" },
+  { type: "FORMANT", label: "FORM", icon: "⊕", tip: "Vowel formant clusters" },
+  { type: "METAL", label: "METL", icon: "⋆", tip: "Inharmonic overtones" },
+  { type: "LINE", label: "LINE", icon: "─", tip: "Hold note — sustained line" },
+  { type: "PLUCK", label: "PLUK", icon: "↑", tip: "Short pluck spike" },
+  {
+    type: "SCATTER",
+    label: "SCAT",
+    icon: "·:·",
+    tip: "Random spray of plucks",
+  },
+  { type: "COMB", label: "COMB", icon: "|||", tip: "Comb filter bands" },
+  { type: "ERASE", label: "ERAS", icon: "✕", tip: "Erase energy" },
+  { type: "SMOOTH", label: "SMTH", icon: "≈", tip: "Smooth neighboring bins" },
+  { type: "RANDOM", label: "RAND", icon: "⁂", tip: "Random harmonics" },
+  {
+    type: "MIRROR",
+    label: "MIRR",
+    icon: "⇔",
+    tip: "Mirror to upper harmonics",
+  },
+  { type: "STACK", label: "STCK", icon: "⊞", tip: "Harmonic ladder" },
+  {
+    type: "COLOR_PICKER",
+    label: "PICK",
+    icon: "⊙",
+    tip: "Sample existing color",
+  },
+  { type: "FILL", label: "FILL", icon: "▣", tip: "Fill region" },
 ];
 
 export default function BrushPanel({ brush, onChange }: BrushPanelProps) {
@@ -27,7 +51,7 @@ export default function BrushPanel({ brush, onChange }: BrushPanelProps) {
         Brush
       </div>
       <div className="grid grid-cols-4 gap-1">
-        {BRUSHES.map(({ type, label, icon }) => (
+        {BRUSHES.map(({ type, label, icon, tip }) => (
           <button
             type="button"
             key={type}
@@ -37,7 +61,7 @@ export default function BrushPanel({ brush, onChange }: BrushPanelProps) {
                 ? "bg-primary/20 border-primary/50 text-primary shadow-glow-sm"
                 : "border-synth-border text-synth-dim hover:border-synth-border hover:text-muted-foreground"
             }`}
-            title={type}
+            title={tip ?? type}
           >
             <span className="text-sm leading-none mb-0.5">{icon}</span>
             <span>{label}</span>

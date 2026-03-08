@@ -580,7 +580,7 @@ class SpectralPaintProcessor extends AudioWorkletProcessor {
       const panL = Math.cos(panAngle);
       const panR = Math.sin(panAngle);
 
-      const sustain = sustainEnergy * 0.001;
+        const sustain = sustainEnergy * 0.03;
       const brightCoeff = 0.5 - brightness * 0.4;
       const delayLen = Math.floor(driftedLen);
 
@@ -616,13 +616,14 @@ class SpectralPaintProcessor extends AudioWorkletProcessor {
     }
 
     // Apply effects and write output
+    const voiceGain = 1.5 / Math.max(1, Math.sqrt(this.MAX_VOICES));
     for (let i = 0; i < blockSize; i++) {
-      let l = this.mixL[i];
-      let r = this.mixR[i];
+      let l = this.mixL[i] * voiceGain;
+      let r = this.mixR[i] * voiceGain;
 
-      // Soft clip
-      l = Math.tanh(l * 0.8);
-      r = Math.tanh(r * 0.8);
+      // Soft clip: drive=2.0 maps moderate signals to near full-scale
+      l = Math.tanh(l * 2.0) * 0.9;
+      r = Math.tanh(r * 2.0) * 0.9;
 
       [l, r] = this._processChorus(l, r);
       [l, r] = this._processDelay(l, r);
