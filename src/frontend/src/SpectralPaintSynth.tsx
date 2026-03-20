@@ -50,7 +50,6 @@ function randomizeParams(): SynthParams {
 
 // Seed the canvas with some initial spectral content
 function seedCanvas(ampGrid: Float32Array[], hueGrid: Uint8Array[]) {
-  // Paint a few harmonic strokes for visual appeal
   const strokes = [
     { col: 20, row: 8, hue: 240, amp: 0.85, spread: 3 },
     { col: 35, row: 12, hue: 60, amp: 0.7, spread: 2 },
@@ -62,7 +61,6 @@ function seedCanvas(ampGrid: Float32Array[], hueGrid: Uint8Array[]) {
   ];
 
   for (const stroke of strokes) {
-    // Draw gaussian peak
     for (let c = stroke.col - 8; c <= stroke.col + 8; c++) {
       if (c < 0 || c >= CANVAS_COLS) continue;
       if (!ampGrid[c]) ampGrid[c] = new Float32Array(CANVAS_BINS);
@@ -78,7 +76,6 @@ function seedCanvas(ampGrid: Float32Array[], hueGrid: Uint8Array[]) {
         const g = Math.exp(-(distC * distC + distR * distR) * 4) * stroke.amp;
         ampGrid[c][r] = Math.max(ampGrid[c][r], g);
         hueGrid[c][r] = stroke.hue;
-        // Add harmonic overtones
         for (let h = 2; h <= 4; h++) {
           const hr = stroke.row + (h - 1) * 3;
           if (hr < CANVAS_BINS) {
@@ -91,6 +88,8 @@ function seedCanvas(ampGrid: Float32Array[], hueGrid: Uint8Array[]) {
     }
   }
 }
+
+type PanelTab = "SOUND" | "SHAPE" | "FX";
 
 export default function SpectralPaintSynth() {
   const [params, setParams] = useState<SynthParams>(DEFAULT_PARAMS);
@@ -108,8 +107,8 @@ export default function SpectralPaintSynth() {
     "Harmonic Harp",
   );
   const [allPresets, setAllPresets] = useState<string[]>(PRESET_NAMES);
+  const [activeTab, setActiveTab] = useState<PanelTab>("SOUND");
 
-  // Playback scan state
   const [playheadPosition, setPlayheadPosition] = useState<number>(0);
   const [currentColumn, setCurrentColumn] = useState<number>(0);
   const [excitationFlashes, setExcitationFlashes] = useState<
@@ -122,13 +121,11 @@ export default function SpectralPaintSynth() {
   const hueGridRef = useRef<Uint8Array[]>([]);
   const drawCountRef = useRef(0);
 
-  // Keep currentColumn in a ref to suppress unused-var lint warning
   const _currentColumnRef = useRef(currentColumn);
   useEffect(() => {
     _currentColumnRef.current = currentColumn;
   }, [currentColumn]);
 
-  // Initialize grids with sample content
   useEffect(() => {
     ampGridRef.current = Array.from(
       { length: CANVAS_COLS },
@@ -141,7 +138,6 @@ export default function SpectralPaintSynth() {
     seedCanvas(ampGridRef.current, hueGridRef.current);
   }, []);
 
-  // Wire up engine callbacks
   const wireCallbacks = useCallback((engine: AudioEngine) => {
     engine.onPlayheadMove = (position: number, column: number) => {
       setPlayheadPosition(position);
@@ -153,7 +149,6 @@ export default function SpectralPaintSynth() {
         ...prev.slice(-10),
         { col: column, energy, id },
       ]);
-      // Auto-expire flashes after 200ms
       setTimeout(() => {
         setExcitationFlashes((prev) => prev.filter((f) => f.id !== id));
       }, 200);
@@ -164,11 +159,9 @@ export default function SpectralPaintSynth() {
   }, []);
 
   const handlePlay = useCallback(() => {
-    // AudioContext must be created/resumed synchronously in the click handler
     if (!engineRef.current) engineRef.current = new AudioEngine();
     engineRef.current.primeContext();
 
-    // Async part: load worklet then start playback scan
     engineRef.current
       .ensureRunning()
       .then(() => {
@@ -201,14 +194,11 @@ export default function SpectralPaintSynth() {
     if (!engineRef.current) engineRef.current = new AudioEngine();
     const engine = engineRef.current;
     if (isMuted) {
-      // Unmute: restore gain
       engine.setMasterGain(3.5);
       setIsMuted(false);
       toast.success("Sound restored");
     } else {
-      // Mute: silence everything
       engine.setMasterGain(0);
-      // Also stop all active voices
       engine.silenceVoices();
       setIsMuted(true);
       toast.info("Quiet — all sound silenced");
@@ -289,7 +279,6 @@ export default function SpectralPaintSynth() {
     });
   }, []);
 
-  // Canvas energy validation helpers
   const autoBoostCanvas = useCallback(() => {
     const grid = ampGridRef.current;
     for (let c = 0; c < grid.length; c++) {
@@ -307,7 +296,7 @@ export default function SpectralPaintSynth() {
       if (c % 8 === 0) {
         if (!grid[c]) continue;
         for (let r = 0; r < grid[c].length; r++) {
-          grid[c][r] *= 0.2; // reduce by 80%
+          grid[c][r] *= 0.2;
         }
       }
     }
@@ -322,7 +311,6 @@ export default function SpectralPaintSynth() {
         setCurrentPreset(name);
         engineRef.current?.updateParams(preset);
 
-        // Validate canvas energy after a brief tick
         setTimeout(() => {
           const grid = ampGridRef.current;
           let totalEnergy = 0;
@@ -346,7 +334,6 @@ export default function SpectralPaintSynth() {
             return;
           }
 
-          // Check if energy is roughly constant (variance < 10% of mean)
           const mean = totalEnergy / colEnergies.length;
           const variance =
             colEnergies.reduce((acc, e) => acc + (e - mean) ** 2, 0) /
@@ -370,7 +357,6 @@ export default function SpectralPaintSynth() {
 
   const handleSavePreset = useCallback(
     (name: string) => {
-      // Store locally (in real app would use backend)
       FACTORY_PRESETS[name] = { ...params };
       if (!allPresets.includes(name)) {
         setAllPresets((prev) => [...prev, name]);
@@ -391,7 +377,6 @@ export default function SpectralPaintSynth() {
   const handleParamsChange = useCallback((updates: Partial<SynthParams>) => {
     setParams((prev) => {
       const next = { ...prev, ...updates };
-      // Send effect updates immediately
       if ("chorusEnabled" in updates || "chorusMix" in updates) {
         engineRef.current?.setEffect(
           "chorus",
@@ -420,16 +405,13 @@ export default function SpectralPaintSynth() {
 
   const handleDraw = useCallback(() => {
     drawCountRef.current++;
-    // Prime audio context synchronously — user gesture is active here
     if (!engineRef.current) engineRef.current = new AudioEngine();
     engineRef.current.primeContext();
 
-    // Auto-trigger sound on draw strokes (every 2 strokes to avoid CPU spikes)
     if (drawCountRef.current % 2 === 0) {
       engineRef.current
         .ensureRunning()
         .then(() => {
-          // Legacy play() for draw-stroke triggered sound
           engineRef.current!.play(
             ampGridRef.current,
             hueGridRef.current,
@@ -442,7 +424,6 @@ export default function SpectralPaintSynth() {
     }
   }, [params]);
 
-  // Spectral Cleanup handlers
   const handleAutoNormalize = useCallback(() => {
     const grid = ampGridRef.current;
     let maxAmp = 0;
@@ -479,7 +460,6 @@ export default function SpectralPaintSynth() {
     toast.success("Silence removed — low values raised to amplitude floor");
   }, [params.amplitudeFloor]);
 
-  // Cleanup
   useEffect(() => {
     return () => {
       engineRef.current?.destroy();
@@ -495,6 +475,12 @@ export default function SpectralPaintSynth() {
     scaleLock: params.scaleLock,
     rootNote: params.rootNote,
   };
+
+  const TAB_LABELS: { id: PanelTab; label: string }[] = [
+    { id: "SOUND", label: "SOUND" },
+    { id: "SHAPE", label: "SHAPE" },
+    { id: "FX", label: "FX / MIX" },
+  ];
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -524,7 +510,6 @@ export default function SpectralPaintSynth() {
 
       {/* Canvas Area */}
       <div className="relative flex-shrink-0" style={{ height: "42vh" }}>
-        {/* Spectral Paint Label */}
         <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
           <span className="text-[9px] font-mono tracking-[0.4em] text-synth-glow/70 uppercase spectral-glow">
             SPECTRAL PAINT
@@ -570,185 +555,227 @@ export default function SpectralPaintSynth() {
         </div>
       </div>
 
-      {/* Collapsible Parameter Panels */}
-      <div
-        className="flex-1 overflow-y-auto overscroll-contain"
-        style={{ scrollbarGutter: "stable" }}
-      >
-        <CollapsiblePanel
-          title="Chord Engine"
-          dataOcid="chord.panel"
-          accentColor="oklch(0.72 0.22 280)"
+      {/* Tab-bank parameter panels */}
+      <div className="flex flex-col flex-1 min-h-0">
+        {/* Sticky Tab Row */}
+        <div className="flex flex-shrink-0 border-b border-synth-border bg-background/95 sticky top-0 z-10">
+          {TAB_LABELS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              data-ocid={`params.${tab.id.toLowerCase()}_tab`}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 py-1.5 text-[10px] font-mono tracking-widest uppercase transition-colors border-r border-synth-border last:border-r-0 ${
+                activeTab === tab.id
+                  ? "text-synth-glow bg-synth-panel/60 border-b-2 border-b-synth-glow"
+                  : "text-synth-dim bg-transparent hover:text-foreground hover:bg-synth-panel/30"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Scrollable Panel Content */}
+        <div
+          className="flex-1 overflow-y-auto overscroll-contain"
+          style={{ scrollbarGutter: "stable" }}
         >
-          <ChordPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Spectral Modifiers">
-          <SpectralModifiersPanel
-            params={params}
-            onChange={handleParamsChange}
-          />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Excitation" defaultOpen>
-          <ExcitationPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel
-          title="Resonator"
-          dataOcid="resonator.panel"
-          defaultOpen
-          accentColor="oklch(0.75 0.2 160)"
-        >
-          <ResonatorPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Body Resonance">
-          <BodyPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Analog Drift">
-          <DriftPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Filter">
-          <FilterPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Envelope (ADSR)">
-          <EnvelopePanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="LFO Modulation">
-          <LFOPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        <CollapsiblePanel title="Effects" accentColor="oklch(0.7 0.25 220)">
-          <EffectsPanel params={params} onChange={handleParamsChange} />
-        </CollapsiblePanel>
-
-        {/* Playback & Canvas Panel */}
-        <CollapsiblePanel
-          title="Playback & Canvas"
-          dataOcid="playback.panel"
-          accentColor="oklch(0.72 0.2 50)"
-        >
-          <div className="p-2 space-y-1.5">
-            <SynthSlider
-              label="DURATION (s)"
-              value={params.canvasDuration}
-              min={1}
-              max={30}
-              step={1}
-              displayValue={`${Math.round(params.canvasDuration)}s`}
-              dataOcid="playback.duration_input"
-              onChange={(v) => handleParamsChange({ canvasDuration: v })}
-            />
-            <SynthSlider
-              label="SPEED"
-              value={params.playbackSpeed}
-              min={0.1}
-              max={4.0}
-              step={0.05}
-              dataOcid="playback.speed_input"
-              onChange={(v) => handleParamsChange({ playbackSpeed: v })}
-            />
-            <SynthSlider
-              label="LOOP START"
-              value={params.loopStart}
-              min={0}
-              max={1}
-              step={0.01}
-              dataOcid="playback.loop_start_input"
-              onChange={(v) =>
-                handleParamsChange({
-                  loopStart: Math.min(v, params.loopEnd - 0.01),
-                })
-              }
-            />
-            <SynthSlider
-              label="LOOP END"
-              value={params.loopEnd}
-              min={0}
-              max={1}
-              step={0.01}
-              dataOcid="playback.loop_end_input"
-              onChange={(v) =>
-                handleParamsChange({
-                  loopEnd: Math.max(v, params.loopStart + 0.01),
-                })
-              }
-            />
-            {/* Debug Mode toggle */}
-            <div className="flex items-center gap-2 py-0.5">
-              <span className="text-[10px] font-mono text-synth-dim w-20 flex-shrink-0">
-                DEBUG MODE
-              </span>
-              <button
-                type="button"
-                data-ocid="playback.debug_toggle"
-                onClick={() =>
-                  handleParamsChange({ debugMode: !params.debugMode })
-                }
-                className={`text-[10px] font-mono px-2 py-0.5 border rounded transition-colors ${
-                  params.debugMode
-                    ? "border-green-500 text-green-400 bg-green-500/10"
-                    : "border-synth-border text-synth-dim bg-transparent"
-                }`}
+          {/* SOUND tab */}
+          {activeTab === "SOUND" && (
+            <>
+              <CollapsiblePanel
+                title="Chord Engine"
+                dataOcid="chord.panel"
+                accentColor="oklch(0.72 0.22 280)"
               >
-                {params.debugMode ? "ON" : "OFF"}
-              </button>
-            </div>
+                <ChordPanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel title="Spectral Modifiers">
+                <SpectralModifiersPanel
+                  params={params}
+                  onChange={handleParamsChange}
+                />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel title="Excitation" defaultOpen>
+                <ExcitationPanel
+                  params={params}
+                  onChange={handleParamsChange}
+                />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel
+                title="Resonator"
+                dataOcid="resonator.panel"
+                defaultOpen
+                accentColor="oklch(0.75 0.2 160)"
+              >
+                <ResonatorPanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+            </>
+          )}
+
+          {/* SHAPE tab */}
+          {activeTab === "SHAPE" && (
+            <>
+              <CollapsiblePanel title="Body Resonance">
+                <BodyPanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel title="Analog Drift">
+                <DriftPanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel title="Filter">
+                <FilterPanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel title="Envelope (ADSR)">
+                <EnvelopePanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel title="LFO Modulation">
+                <LFOPanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+            </>
+          )}
+
+          {/* FX / MIX tab */}
+          {activeTab === "FX" && (
+            <>
+              <CollapsiblePanel
+                title="Effects"
+                accentColor="oklch(0.7 0.25 220)"
+              >
+                <EffectsPanel params={params} onChange={handleParamsChange} />
+              </CollapsiblePanel>
+
+              <CollapsiblePanel
+                title="Playback & Canvas"
+                dataOcid="playback.panel"
+                accentColor="oklch(0.72 0.2 50)"
+              >
+                <div className="p-2 space-y-1.5">
+                  <SynthSlider
+                    label="DURATION (s)"
+                    value={params.canvasDuration}
+                    min={1}
+                    max={30}
+                    step={1}
+                    displayValue={`${Math.round(params.canvasDuration)}s`}
+                    dataOcid="playback.duration_input"
+                    onChange={(v) => handleParamsChange({ canvasDuration: v })}
+                  />
+                  <SynthSlider
+                    label="SPEED"
+                    value={params.playbackSpeed}
+                    min={0.1}
+                    max={4.0}
+                    step={0.05}
+                    dataOcid="playback.speed_input"
+                    onChange={(v) => handleParamsChange({ playbackSpeed: v })}
+                  />
+                  <SynthSlider
+                    label="LOOP START"
+                    value={params.loopStart}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    dataOcid="playback.loop_start_input"
+                    onChange={(v) =>
+                      handleParamsChange({
+                        loopStart: Math.min(v, params.loopEnd - 0.01),
+                      })
+                    }
+                  />
+                  <SynthSlider
+                    label="LOOP END"
+                    value={params.loopEnd}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    dataOcid="playback.loop_end_input"
+                    onChange={(v) =>
+                      handleParamsChange({
+                        loopEnd: Math.max(v, params.loopStart + 0.01),
+                      })
+                    }
+                  />
+                  <div className="flex items-center gap-2 py-0.5">
+                    <span className="text-[10px] font-mono text-synth-dim w-20 flex-shrink-0">
+                      DEBUG MODE
+                    </span>
+                    <button
+                      type="button"
+                      data-ocid="playback.debug_toggle"
+                      onClick={() =>
+                        handleParamsChange({ debugMode: !params.debugMode })
+                      }
+                      className={`text-[10px] font-mono px-2 py-0.5 border rounded transition-colors ${
+                        params.debugMode
+                          ? "border-green-500 text-green-400 bg-green-500/10"
+                          : "border-synth-border text-synth-dim bg-transparent"
+                      }`}
+                    >
+                      {params.debugMode ? "ON" : "OFF"}
+                    </button>
+                  </div>
+                </div>
+              </CollapsiblePanel>
+
+              <CollapsiblePanel
+                title="Spectral Cleanup"
+                dataOcid="cleanup.panel"
+                accentColor="oklch(0.7 0.18 200)"
+              >
+                <div className="p-2 space-y-1.5">
+                  <SynthSlider
+                    label="COMPRESSOR"
+                    value={params.energyCompressor}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    dataOcid="cleanup.compressor_input"
+                    onChange={(v) =>
+                      handleParamsChange({ energyCompressor: v })
+                    }
+                  />
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      data-ocid="cleanup.normalize_button"
+                      onClick={handleAutoNormalize}
+                      className="flex-1 text-[10px] font-mono py-1 px-2 border border-synth-border text-synth-dim hover:text-foreground hover:border-synth-glow/50 transition-colors rounded"
+                    >
+                      AUTO NORMALIZE
+                    </button>
+                    <button
+                      type="button"
+                      data-ocid="cleanup.silence_button"
+                      onClick={handleRemoveSilence}
+                      className="flex-1 text-[10px] font-mono py-1 px-2 border border-synth-border text-synth-dim hover:text-foreground hover:border-synth-glow/50 transition-colors rounded"
+                    >
+                      REMOVE SILENCE
+                    </button>
+                  </div>
+                </div>
+              </CollapsiblePanel>
+            </>
+          )}
+
+          {/* Footer */}
+          <div className="px-3 py-2 text-center">
+            <a
+              href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(typeof window !== "undefined" ? window.location.hostname : "")}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] font-mono text-synth-dim hover:text-muted-foreground transition-colors"
+            >
+              © {new Date().getFullYear()}. Built with ♥ using caffeine.ai
+            </a>
           </div>
-        </CollapsiblePanel>
-
-        {/* Spectral Cleanup Panel */}
-        <CollapsiblePanel
-          title="Spectral Cleanup"
-          dataOcid="cleanup.panel"
-          accentColor="oklch(0.7 0.18 200)"
-        >
-          <div className="p-2 space-y-1.5">
-            <SynthSlider
-              label="COMPRESSOR"
-              value={params.energyCompressor}
-              min={0}
-              max={1}
-              step={0.01}
-              dataOcid="cleanup.compressor_input"
-              onChange={(v) => handleParamsChange({ energyCompressor: v })}
-            />
-            <div className="flex gap-2 pt-1">
-              <button
-                type="button"
-                data-ocid="cleanup.normalize_button"
-                onClick={handleAutoNormalize}
-                className="flex-1 text-[10px] font-mono py-1 px-2 border border-synth-border text-synth-dim hover:text-foreground hover:border-synth-glow/50 transition-colors rounded"
-              >
-                AUTO NORMALIZE
-              </button>
-              <button
-                type="button"
-                data-ocid="cleanup.silence_button"
-                onClick={handleRemoveSilence}
-                className="flex-1 text-[10px] font-mono py-1 px-2 border border-synth-border text-synth-dim hover:text-foreground hover:border-synth-glow/50 transition-colors rounded"
-              >
-                REMOVE SILENCE
-              </button>
-            </div>
-          </div>
-        </CollapsiblePanel>
-
-        {/* Footer */}
-        <div className="px-3 py-2 text-center">
-          <a
-            href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(typeof window !== "undefined" ? window.location.hostname : "")}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[10px] font-mono text-synth-dim hover:text-muted-foreground transition-colors"
-          >
-            © {new Date().getFullYear()}. Built with ♥ using caffeine.ai
-          </a>
         </div>
       </div>
     </div>

@@ -198,7 +198,7 @@ export default function TopBar({
             <FolderOpen className="w-3 h-3 mr-1 flex-shrink-0" />
             <SelectValue placeholder="PRESET" />
           </SelectTrigger>
-          <SelectContent className="bg-synth-panel border-synth-border font-mono text-[11px]">
+          <SelectContent className="bg-synth-panel border-synth-border font-mono text-[11px] max-h-60 overflow-y-auto">
             {presetNames.map((name) => (
               <SelectItem key={name} value={name} className="text-[11px]">
                 {name}

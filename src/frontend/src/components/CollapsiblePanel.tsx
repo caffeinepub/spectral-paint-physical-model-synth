@@ -28,7 +28,7 @@ export default function CollapsiblePanel({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-synth-panel/50 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-synth-panel/50 transition-colors"
       >
         <div className="flex items-center gap-2">
           {icon && <span className="text-synth-dim">{icon}</span>}
@@ -40,9 +40,9 @@ export default function CollapsiblePanel({
           </span>
         </div>
         {open ? (
-          <ChevronDown className="w-3 h-3 text-synth-dim" />
+          <ChevronDown className="w-4 h-4 text-synth-dim" />
         ) : (
-          <ChevronRight className="w-3 h-3 text-synth-dim" />
+          <ChevronRight className="w-4 h-4 text-synth-dim" />
         )}
       </button>
       {open && (
